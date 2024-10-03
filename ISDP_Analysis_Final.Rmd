@@ -1,0 +1,806 @@
+---
+title: "Physio Protocol"
+subtitle: "ISDP Quality Analysis"
+author: "Elisa Ugarte"
+date: "9/21/2024"
+output: 
+  html_document:
+  #word_document:
+    toc: true
+    toc_depth: 4
+  #self_contained: true
+  #thumbnails: true
+  #lightbox: true
+  gallery: true
+  highlight: tango
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+setwd("~/eu2082@nyu.edu - Google Drive/My Drive/Infant Physio Acquisition Paper")
+
+#open packages
+list.of.packages <- c("easystats","foreign", "psych", "reshape2", "dplyr", "ggplot2","tidyr", "haven", "readxl", "tidyverse","openxlsx", "Hmisc", "janitor", "lme4", "ggsci", "ggpubr", "lmerTest", "sjPlot", "sjmisc", "sjlabelled", "labelled", "codebook", "data.table", "jcolors", "lessR", "lmeresampler", "MuMIn", "caret", "coefplot", "modelbased", "questionr","BayesFactor", "bayestestR", "stringr", "gridExtra", "lavaan", "modelr", "see", "zscorer", "datawizard", "rstatix")
+
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+# Loading packages
+lapply(list.of.packages, require, character.only = TRUE)
+
+#Themes & Colors
+theme_ins <-
+  theme_minimal() +
+  theme(
+    panel.grid.major.x  = element_blank(),
+    panel.grid.minor.x  = element_blank(),
+    plot.title = element_text(size = 18, hjust = .5),
+    axis.title = element_text(size = 18),
+    axis.text = element_text(size = 16),
+    legend.title = element_text(size = 18), 
+    legend.text = element_text(size = 16),
+    legend.position = "bottom",
+    #panel.background = element_rect(fill = "white")
+  )
+
+theme_ins2 <-
+  theme_minimal() +
+  theme(
+    panel.grid.major.x  = element_blank(),
+    panel.grid.minor.x  = element_blank(),
+    plot.title = element_text(size = 18, hjust = .5),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    legend.title = element_text(size = 12), 
+    legend.text = element_text(size = 10),
+    legend.position = "bottom",
+    #panel.background = element_rect(fill = "white")
+  )
+
+
+
+poster <- c("#0072B2","maroon", "darkorange4", "#6A3D9A")
+
+dat <- readRDS("~/Library/CloudStorage/Box-Box/ML Child RSA/20240919/model_ready/physio_quality.RDS")
+
+dat <- dat %>%
+  dplyr::mutate(rec_third=ifelse(is.na(cal_date_third),1,0))
+
+data <- dat %>% select(-c(`Alone baseline included into Elisa's finalized data set on 9/11/23`, `Together baseline included into finalized data set on 9/11/23`, respondent_cat.x, camp, q102c_bd_arrive_yr:total, ace_f_en:ace_f_cv, cindex_UN:read_language, basic_resources_prei:cooking_with_wood_binary, number_of_children:htq_ptsd_dsm_28, no_support_pregnancy_28:onemonth_b, height_m, dummy_hypertension:systolic_pressure_1_28, dummy_hypertension_28:categorized_illness_28, bgmc_bas_apart_e_t_1_28:bgmom_only_s_t_1_28,child_gender_birth,  survey_date_birth, child_gender_rnda:corrected_age_month, continuous_days:Choronological_age, bgm_bas_lap_help_1_28, bgm_qus_tapping_1_28, bgm_qus_others_1_28)) %>% dplyr::rename(bgm_qus_bfeed_1_28 = bgm_qus_oth_1_28, bgc_a_b_comp = `alone baseline complete`, bgm_t_b_comp = `together baseline complete`, bgc_a_b_par = `alone partial baseline`, bgm_t_b_par = `together partial baseline`, bgc_a_b_un = `alone unusable`, bgm_t_b_un = `together unusable`, bgc_a_b_nq=`Alone basline exist but was not assesed for quality`, bgm_t_b_nq=`Together basline exist but was not assesed for quality`, bgc_a_b_na=`Alone baseline is missing`, bgm_t_b_na=`Together baseline is missing`) %>% mutate(bgc_a_b_par = case_when(bgc_a_b_par == 9 ~ 1, TRUE~bgc_a_b_par))
+
+data <- data %>%
+  mutate(across(contains(c("bgc", "bgm")), as.factor))
+glimpse(data)
+
+
+# Create the three variables in your dataset with term_category as a factor
+data <- data %>%
+  mutate(
+    # 1. Premature variable (<36 weeks)
+    premature = ifelse(child_ga_final < 36, 1, 0),  # 1 = premature, 0 = not premature
+    
+    # 2. Term category based on gestational age, created as a factor
+    term_category = factor(case_when(
+      child_ga_final >= 37 & child_ga_final < 39 ~ "Early Term",  # 37 weeks to 38 weeks 6 days
+      child_ga_final >= 39 & child_ga_final <= 40 ~ "Full Term",  # 39 weeks to 40 weeks 6 days
+      child_ga_final >= 41 & child_ga_final <= 41.6 ~ "Late Term",  # 41 weeks to 41 weeks 6 days
+      child_ga_final >= 42 ~ "Postterm",  # 42 weeks and beyond
+      TRUE ~ NA_character_  # Handle missing values or gestational ages that don't fit
+    ), levels = c("Early Term", "Full Term", "Late Term", "Postterm")),  # Order of levels
+    
+    # 3. Less than Full Term (<39 weeks)
+    less_than_full_term = ifelse(child_ga_final < 39, 1, 0)  # 1 = less than full term, 0 = full term or later
+  )
+
+glimpse(data)
+data %>% count(term_category)
+data %>% count(!is.na(RSA_tog) & is.na(child_ga_final))
+
+# Assuming your data is in a data frame called `data`
+data <- data %>%
+  mutate(date_category = case_when(
+    format(time_start_date, "%Y-%m") == "2023-10" ~ "October 2023",
+    format(time_start_date, "%Y-%m") == "2024-01" ~ "January 2024",
+    TRUE ~ NA_character_  # Optional: handle cases outside of the target dates
+  ))
+
+# Convert date_category to a factor
+data <- data %>%
+  mutate(date_category = factor(date_category, levels = c("October 2023", "January 2024")))
+
+# Check the result
+head(data$date_category)
+table(data$time_start_date, data$date_category)
+
+data <- data %>% mutate(child_ga_final = case_when(child_ga_final < 5 ~ NA_real_,
+                                                   TRUE ~ child_ga_final))
+
+# List of variables to check for outliers
+variables <- c("child_age_final","child_ga_final",            "average_baby_circum_plausible.y" ,"average_baby_length.y"   ,        "average_baby_muac.y"   ,    "average_baby_weight.y", "average_birth_circum" ,           "average_birth_length" ,"average_birth_muac" ,"average_birth_weight")  # Replace these with your actual variable names
+
+# Loop through the variables and check for outliers
+for (var in variables) {
+  # Use the `identify_outliers` function on each variable
+  outliers <- data %>%
+    identify_outliers(!!sym(var)) %>%
+    filter(is.outlier == "TRUE") %>%
+    select(!!sym(var), is.outlier, is.extreme)
+  
+  # Print the outliers for the current variable
+  cat("\nOutliers for:", var, "\n")
+  print(outliers, n = 500)
+}
+
+
+
+
+```
+
+### Z score anthro Birth
+```{r, echo =FALSE}
+
+anthro <- data %>% select(contains(c("birth", "child_gender_final", "hhid_int"))) %>% mutate(days_b= 2)
+colnames(anthro)
+
+anthro <- addWGSR(data = anthro,
+        sex = "child_gender_final",
+        firstPart = "average_birth_weight",
+        secondPart = "average_birth_length",
+        index = "wfl")
+
+anthro <- addWGSR(data = anthro,
+        sex = "child_gender_final",
+        firstPart = "average_birth_weight",
+        secondPart = "days_b",
+        index = "wfa")
+
+anthro <- addWGSR(data = anthro,
+        sex = "child_gender_final",
+        firstPart = "average_birth_length",
+        secondPart = "days_b",
+        index = "lfa")
+
+# anthro <- addWGSR(data = anthro,
+#         sex = "child_gender",
+#         firstPart = "average_birth_muac",
+#         secondPart = "days_b",
+#         index = "mfa")
+
+anthro <- addWGSR(data = anthro,
+        sex = "child_gender_final",
+        firstPart = "average_birth_circum",
+        secondPart = "days_b",
+        index = "hca")
+
+anthro<-anthro %>% mutate(
+
+  lfaz= ifelse(lfaz>=(-6) & lfaz<6, lfaz, NA),
+
+  stunting= ifelse(lfaz<(-2), 1, 0),
+
+  wfaz= ifelse(wfaz>=(-6) & wfaz<5, wfaz, NA),
+
+  underweight= ifelse(wfaz<(-2), 1, 0),
+
+  wflz= ifelse(wflz>=(-5) & wflz<5, wflz, NA),
+
+  wasting= ifelse(wflz<(-2), 1, 0))
+
+
+anthro %>% count(underweight)
+anthro %>% count(stunting)
+anthro %>% count(wasting)
+
+anthro <- anthro %>% mutate(weight4length = average_birth_weight/average_birth_length)
+
+# Categorize birth weight into VLBW, LBW, and NBW for data in kilograms
+anthro <- anthro %>%
+  mutate(weight_category = case_when(
+    average_birth_weight < 1.5 ~ "Very Low Birth Weight",
+    average_birth_weight >= 1.5 & average_birth_weight < 2.5 ~ "Low Birth Weight",
+    average_birth_weight >= 2.5 ~ "Normal Birth Weight",
+    TRUE ~ NA_character_  # Handle missing values
+  ))
+
+# Check the new categorized variable
+table(anthro$weight_category)
+table(anthro$weight_category, anthro$underweight)
+
+anthro %>% print(width = Inf)
+
+anthro_birth <- anthro %>%
+  select(hhid_int, wflz:weight_category) %>%  # Select the columns
+  rename_with(~ paste0(., "_birth"), -hhid_int)  # Add "_birth" to all except 'hhid_int'
+
+# Check the new column names
+colnames(anthro_birth)
+
+data <- left_join(data, anthro_birth, by = "hhid_int")
+
+```
+
+### WHO 28 days
+
+```{r, echo = F}
+
+
+# Step 1: Select relevant variables and retain 'continuous_days' variable
+anthro <- data %>%
+  select(contains(c("baby", "child_gender_final", "hhid_int")), child_age_final)
+
+# Step 2: Add WHO growth standard measures (weight-for-length, weight-for-age, length-for-age)
+# Weight-for-length (wflz)
+anthro <- addWGSR(data = anthro,
+                  sex = "child_gender_final",
+                  firstPart = "average_baby_weight.y",  # Use 'average_baby_weight.y' for weight
+                  secondPart = "average_baby_length.y",  # Use 'average_baby_length.y' for length
+                  index = "wfl")
+
+# Weight-for-age (wfaz)
+anthro <- addWGSR(data = anthro,
+                  sex = "child_gender_final",
+                  firstPart = "average_baby_weight.y",  # Use 'average_baby_weight.y' for weight
+                  secondPart = "child_age_final",  # Use 'continuous_days' for the age in days
+                  index = "wfa")
+
+# Length-for-age (lfaz)
+anthro <- addWGSR(data = anthro,
+                  sex = "child_gender_final",
+                  firstPart = "average_baby_length.y",  # Use 'average_baby_length.y' for length
+                  secondPart = "child_age_final",  # Use 'continuous_days' for the age in days
+                  index = "lfa")
+
+# Head circumference-for-age (hca)
+anthro <- addWGSR(data = anthro,
+                  sex = "child_gender_final",
+                  firstPart = "average_baby_circum_plausible.y",  # Use 'average_baby_circum' for head circumference
+                  secondPart = "child_age_final",  # Use 'continuous_days' for the age in days
+                  index = "hca")
+
+
+# Step 3: Clean WHO growth standard variables and calculate stunting, underweight, and wasting
+anthro <- anthro %>%
+  mutate(
+    lfaz = ifelse(lfaz >= (-6) & lfaz < 6, lfaz, NA),
+    stunting = ifelse(lfaz < -2, 1, 0),
+    wfaz = ifelse(wfaz >= (-6) & wfaz < 5, wfaz, NA),
+    underweight = ifelse(wfaz < -2, 1, 0),
+    wflz = ifelse(wflz >= (-5) & wflz < 5, wflz, NA),
+    wasting = ifelse(wflz < -2, 1, 0)
+  )
+
+anthro <- anthro %>% mutate(weight4length = average_baby_weight.y/average_baby_length.y)
+
+# Step 4: Print tables to check stunting, underweight, and wasting
+table(anthro$underweight)
+table(anthro$stunting)
+table(anthro$wasting)
+
+anthro %>% print(width = Inf)
+
+# Step 5: Add "_28" to column names, except for 'hhid_int'
+anthro_28 <- anthro %>%
+  select(hhid_int, wflz:weight4length) %>%  # Select relevant columns
+  rename_with(~ paste0(., "_28"), -hhid_int)  # Add "_28" to all except 'hhid_int'
+
+# Step 6: Merge 'anthro_28' back with the original dataset
+data <- left_join(data, anthro_28, by = "hhid_int")
+
+# Step 7: Check the final column names of 'anthro_28'
+colnames(anthro_28)
+
+
+```
+
+
+### Behavioral indicators and RSA
+
+```{r}
+
+data %>% dplyr::select(bgc_baseline_n1_1_28, bgc_baseline_n2_1_28, bgm_baseline_n1_1_28, bgm_baseline_n2_1_28) %>% report_table()
+
+data %>% 
+  mutate(across(c(bgc_baseline_n1_1_28, bgc_baseline_n2_1_28, bgm_baseline_n1_1_28, 
+                  bgm_baseline_n2_1_28, fussiness_1_28), as.numeric)) %>%
+  
+  # Calculate the average for bgc (Baseline Galvanic Conductance)
+  mutate(bgc_avg = (bgc_baseline_n1_1_28 + bgc_baseline_n2_1_28) / 2,
+         
+         # Calculate the average for bgm (Baseline Galvanic Movement)
+         bgm_avg = (bgm_baseline_n1_1_28 + bgm_baseline_n2_1_28) / 2,
+         
+         # Calculate the overall average of bgc and bgm
+         bgc_bgm_avg = (bgc_avg + bgm_avg) / 2) %>% 
+  correlation(p_adjust = "none", select = c("RSA_alone", "RSA_tog"), select2 = c("bgc_avg", "bgm_avg")) 
+data <- data %>%
+  mutate(bgc_avg = rowMeans(cbind(bgc_baseline_n1_1_28, bgc_baseline_n2_1_28), na.rm = TRUE),# Calculate the average for bgm, ignoring NA values
+         bgm_avg = rowMeans(cbind(bgm_baseline_n1_1_28, bgm_baseline_n2_1_28), na.rm = TRUE))
+
+library(ggplot2)
+
+describe_distribution(data$bgc_avg)
+describe_distribution(data$bgm_avg)
+
+p1 <- data %>% 
+  ggplot(aes(bgc_avg, RSA_alone)) +
+  geom_point(size = 4, colour = "#0072B2")+
+  geom_smooth(method = "lm", size = 1, color = "black", alpha = 0.2) + theme_modern() + 
+  labs(
+    x = "Predominant Baseline State (r = -.33)",
+    y = "Infant Solo Baseline RSA"
+  ) +  scale_y_continuous(breaks = seq(1, 6, 0.5), expand = expansion(mult = 0.05)) +  # More detailed RSA scale
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 5))
+
+p2 <- data %>% 
+  ggplot(aes(bgm_avg, RSA_tog)) +
+  geom_point(size = 4, colour = "maroon")+
+  geom_smooth(method = "lm", size = 1, color = "black", alpha = 0.2) + theme_modern() + 
+  labs(
+    x = "Predominant Baseline State (r = -.23)",
+    y = "Mom Infant Joint RSA"
+  ) +  scale_y_continuous(breaks = seq(1, 6, 0.5), expand = expansion(mult = 0.05)) +  # More detailed RSA scale
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 5))
+
+see::plots(p2,p1, n_columns = 1, title = "Associations between baseline behavioral indicators & Infant RSA", subtitle = "Higher scores denote more arousal")
+ggsave("RSAArousal.png", width = 4.5, height = 7, unit = "in", dpi = 300, bg = 'white')
+
+
+# Assign states based on ranges of bgc_avg values
+data <- data %>%
+  mutate(bgc_state = case_when(
+    bgc_avg >= 0.5 & bgc_avg < 1.5 ~ "State 1: Eyes closed, regular breathing, no activity",
+    bgc_avg >= 1.5 & bgc_avg < 2.5 ~ "State 2: Eyes closed, irregular respiration, small movements",
+    bgc_avg >= 2.5 & bgc_avg < 3.5 ~ "State 3: Drowsy; minimal activity",
+    bgc_avg >= 3.5 & bgc_avg < 4.5 ~ "State 4: Alert, orienting to mother or object",
+    bgc_avg >= 4.5 & bgc_avg < 5.5 ~ "State 5: Medium motor activity, brief fussiness",
+    bgc_avg >= 5.5 ~ "State 6: Crying; high motor activity",
+    TRUE ~ NA_character_  # Handle cases that don't fit
+  ))
+
+# Assign states for BGM similarly
+data <- data %>%
+  mutate(bgm_state = case_when(
+    bgm_avg >= 0.5 & bgm_avg < 1.5 ~ "State 1: Eyes closed, regular breathing, no activity",
+    bgm_avg >= 1.5 & bgm_avg < 2.5 ~ "State 2: Eyes closed, irregular respiration, small movements",
+    bgm_avg >= 2.5 & bgm_avg < 3.5 ~ "State 3: Drowsy; minimal activity",
+    bgm_avg >= 3.5 & bgm_avg < 4.5 ~ "State 4: Alert, orienting to mother or object",
+    bgm_avg >= 4.5 & bgm_avg < 5.5 ~ "State 5: Medium motor activity, brief fussiness",
+    bgm_avg >= 5.5 ~ "State 6: Crying; high motor activity",
+    TRUE ~ NA_character_
+  ))
+
+
+# Step 1: Filter the data to ensure complete cases for RSA and bgc_state
+complete_data <- data %>% filter(!is.na(RSA_alone) & !is.na(bgc_state))
+
+# Step 2: Regress RSA on state using the filtered data
+rsa_state_model <- lm(RSA_alone ~ bgc_avg, data = complete_data)
+
+# Step 3: Extract residuals
+complete_data$rsa_residual_alone <- resid(rsa_state_model)
+
+# Step 4: Merge the residuals back into the original dataset
+# Add the residuals back to the full dataset, filling with NA where data was missing
+data <- data %>%
+  left_join(complete_data %>% select(hhid_int, rsa_residual_alone), by = "hhid_int")  # Assuming hhid_int is a unique identifier
+
+
+
+library(stringr)
+
+
+# Shorten the labels for better display in the legend
+wrapped_labels <- str_wrap(c(
+  "State 1: Eyes closed, regular breathing, no activity",
+  "State 2: Eyes closed, irregular respiration, small movements",
+  "State 3: Drowsy; minimal activity",
+  "State 4: Alert, orienting to mother or object",
+  "State 5: Medium motor activity, brief fussiness",
+  "State 6: Crying; high motor activity"
+), width = 25)
+
+# Define colors for each state
+state_colors <- c(
+  "State 1: Eyes closed, regular breathing, no activity" = "#a6cee3",
+  "State 2: Eyes closed, irregular respiration, small movements" = "#1f78b4",
+  "State 3: Drowsy; minimal activity" = "#b2df8a",
+  "State 4: Alert, orienting to mother or object" = "#33a02c",
+  "State 5: Medium motor activity, brief fussiness" = "#fb9a99",
+  "State 6: Crying; high motor activity" = "#e31a1c"
+)
+
+# Set factor levels to ensure consistency in the ordering
+all_states <- names(state_colors)
+
+# Apply factor levels to both bgc_state and bgm_state
+data$bgc_state <- factor(data$bgc_state, levels = all_states)
+data$bgm_state <- factor(data$bgm_state, levels = all_states)
+
+# Reshape the data for the stacked bar plot (long format)
+stacked_data <- data %>%
+  select(bgc_state, bgm_state) %>%
+  pivot_longer(cols = c(bgc_state, bgm_state), names_to = "Measurement", values_to = "State")
+
+# Remove rows with NA in the 'State' column
+stacked_data_clean <- stacked_data %>%
+  filter(!is.na(State))
+
+# Calculate counts and proportions for each state in bgc and bgm
+stacked_data_clean <- stacked_data_clean %>%
+  group_by(Measurement, State) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(Measurement) %>%
+  mutate(percentage = count / sum(count) * 100)  # Calculate percentage for each state
+
+# Create the stacked bar plot with percentage labels and custom colors
+stacked_plot_clean <- ggplot(stacked_data_clean, aes(x = Measurement, y = count, fill = State)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", alpha = 0.8) +  # Stacked bars with black outline
+  geom_text(aes(label = sprintf("%.1f%%", percentage)),  # Add percentage labels
+            position = position_stack(vjust = 0.5), size = 3) +  # Position text in the middle of each stack
+  scale_fill_manual(values = state_colors, labels = wrapped_labels) +  # Use custom colors and wrapped labels
+  labs(title = "Stacked Bar Plot of BGC and BGM States with Percentages",
+       x = "Measurement",
+       y = "Count",
+       fill = "State") +  # Label the legend
+  scale_x_discrete(labels = c("bgc_state" = "State - Alone", "bgm_state" = "State - Joint baseline")) +  # Relabel x-axis
+  theme_minimal() +  # Minimal theme for a clean look
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),  # Customize the title
+    axis.title.x = element_text(size = 12),  # Customize x-axis title
+    axis.title.y = element_text(size = 12),  # Customize y-axis title
+    legend.position = "right",  # Adjust legend position
+    legend.text = element_text(size = 8)  # Adjust legend text size
+  )
+
+# Display the plot
+print(stacked_plot_clean)
+
+
+# Reshape the data for the stacked bar plot (long format)
+stacked_data <- data %>%
+  select(bgc_state, bgm_state, date_category) %>%  # Include date_category in the data
+  pivot_longer(cols = c(bgc_state, bgm_state), names_to = "Measurement", values_to = "State")
+
+# Remove rows with NA in the 'State' column
+stacked_data_clean <- stacked_data %>%
+  filter(!is.na(State))
+
+# Calculate counts and proportions for each state in bgc and bgm
+stacked_data_clean <- stacked_data_clean %>%
+  group_by(Measurement, State, date_category) %>%  # Group by date_category for faceting
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(Measurement, date_category) %>%
+  mutate(percentage = count / sum(count) * 100)  # Calculate percentage for each state within date_category
+
+# Create the stacked bar plot with percentage labels and custom colors, faceted by date_category
+stacked_plot_clean <- ggplot(stacked_data_clean, aes(x = Measurement, y = count, fill = State)) +
+  geom_bar(stat = "identity", position = "stack", color = "black", alpha = 0.8) +  # Stacked bars with black outline
+  geom_text(aes(label = sprintf("%.1f%%", percentage)),  # Add percentage labels
+            position = position_stack(vjust = 0.5), size = 3) +  # Position text in the middle of each stack
+  scale_fill_manual(values = state_colors, labels = wrapped_labels) +  # Use custom colors and wrapped labels
+  labs(title = "Changes in arousal leves after we adjusted the protocol", 
+       x = "Measurement", 
+       y = "Count", 
+       fill = "State") +  # Label the legend
+  scale_x_discrete(labels = c("bgc_state" = "State - Alone", "bgm_state" = "State - Joint baseline")) +  # Relabel x-axis
+  theme_minimal() +  # Minimal theme for a clean look
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),  # Customize the title
+    axis.title.x = element_text(size = 12),  # Customize x-axis title
+    axis.title.y = element_text(size = 12),  # Customize y-axis title
+    legend.position = "right",  # Adjust legend position
+    legend.text = element_text(size = 8),
+    strip.text = element_text(size = 14)# Adjust legend text size
+  ) +
+  facet_wrap(~ date_category)  # Create panels for each date_category
+
+# Display the plot
+print(stacked_plot_clean)
+ggsave("Arousal.png", width = 7, height = 6, unit = "in", dpi = 300, bg = 'white')
+
+
+table(data$bgm_qus_face_1_28)
+lessR::tt_brief(RSA_tog  ~ bgm_qus_face_1_28, data = data)
+
+#table(data$bgm_qus_kissing_1_28)
+#lessR::tt_brief(RSA_tog  ~ bgm_qus_kissing_1_28, data = data)
+
+table(data$bgm_qus_bfeed_1_28)
+lessR::tt_brief(RSA_tog  ~ bgm_qus_bfeed_1_28, data = data)
+
+table(data$bgm_qus_rocking_1_28)
+lessR::tt_brief(RSA_tog  ~ bgm_qus_rocking_1_28, data = data)
+
+table(data$bgm_qus_stroking_1_28)
+lessR::tt_brief(RSA_tog  ~ bgm_qus_stroking_1_28, data = data)
+
+table(data$bgm_qus_talking_1_28)
+lessR::tt_brief(RSA_tog  ~ bgm_qus_talking_1_28, data = data)
+
+ANOVA(RSA_alone ~ fussiness_1_28, data)
+ANOVA(RSA_tog ~ fussiness_1_28, data)
+
+completedat <- data %>% filter(!is.na(RSA_alone) & !is.na(RSA_tog)) 
+
+
+data %>% 
+  ggplot(aes(RSA_alone, RSA_tog)) +
+  geom_point(size = 4, colour = "maroon")+
+  geom_smooth(method = "lm", size = 1, color = "black", alpha = 0.2) + theme_modern() + 
+  labs(
+    x = "RSA Alone",
+    y = "RSA with Mom"
+  )
+
+
+```
+
+# RSA quality predictors
+% of children with full baseline with mom
+% of children with partial baseline with mom
+% of children with full baseline alone
+% of children with partial baseline alone
+% of children with unusable data 
+
+```{r h11, echo=F}
+
+dim(data)
+data %>% select(starts_with("bgc_a_")) %>% report_table()
+data %>% select(starts_with("bgm_t_")) %>% report_table()
+
+data <- data %>% 
+  mutate(alone_usable = case_when(
+    bgc_a_b_comp == 1 ~ 1,  # If bgc_a_b_comp is 1, assign 1
+    bgc_a_b_par == 1 ~ 1,   # If bgc_a_b_par is 1, assign 1
+    bgc_a_b_un == 1 ~ 0,    # If bgc_a_b_un is 1, assign 0
+    bgc_a_b_na == 1 ~ 99,    # If bgc_a_b_na is 1, assign 0
+    bgc_a_b_nq == 1 ~ NA_real_,  # If bgc_a_b_nq is 1, assign NA
+    TRUE ~ NA_real_  # Catch-all for any other cases (default to NA)
+  )) %>% mutate(alone_usable_b = case_when(alone_usable == 99 ~ 0,
+         TRUE ~ alone_usable)) %>% 
+  mutate(alone_usable = as.factor(alone_usable), alone_usable_b = as.factor(alone_usable_b)) #%>% 
+ # select(alone_usable) %>% 
+ # report_table()
+
+data <- data %>% 
+  mutate(together_usable = case_when(
+    bgm_t_b_comp == 1 ~ 1,  # If bgc_a_b_comp is 1, assign 1
+    bgm_t_b_par == 1 ~ 1,   # If bgc_a_b_par is 1, assign 1
+    bgm_t_b_un == 1 ~ 0,    # If bgc_a_b_un is 1, assign 0
+    bgm_t_b_na == 1 ~ 99,    # If bgc_a_b_na is 1, assign 0
+    bgm_t_b_nq == 1 ~ NA_real_,  # If bgc_a_b_nq is 1, assign NA
+    TRUE ~ NA_real_  # Catch-all for any other cases (default to NA)
+  )) %>% mutate(together_usable_b = case_when(together_usable == 99 ~ 0,
+         TRUE ~ together_usable)) %>% 
+  mutate(together_usable = as.factor(together_usable), together_usable_b = as.factor(together_usable_b))
+ # select(alone_usable) %>% 
+ # report_table()
+data %>% select(together_usable, alone_usable) %>% report_table()
+data %>% filter(bgm_t_b_nq == 0) %>% select(together_usable, together_usable_b) %>% report_table()
+data %>% filter(bgc_a_b_nq == 0) %>% select(alone_usable, alone_usable_b) %>% report_table()
+
+data %>% count(is.na(bgc_avg) & alone_usable == 99)
+data %>% count(!is.na(RSA_tog) & !is.na(RSA_alone))
+data %>% count(!is.na(RSA_tog) & is.na(RSA_alone))
+data %>% count(is.na(RSA_tog) & !is.na(RSA_alone))
+data %>% count(hhid_int)
+
+
+ANOVA(bgc_avg  ~ alone_usable, data = data)
+ANOVA(bgm_avg  ~ together_usable, data = data)
+
+tt_brief(bgc_avg  ~ alone_usable_b, data = data)
+tt_brief(bgm_avg  ~ together_usable_b, data = data)
+
+
+data_child <- data %>% filter(bgc_a_b_nq == 0)
+tt_brief(bgc_avg  ~ bgc_a_b_par, data = data_child)
+
+tt_brief(bgm_avg  ~ date_category, data = data_child)
+tt_brief(bgc_avg  ~ date_category, data = data)
+tt_brief(RSA_tog  ~ date_category, data = data)
+tt_brief(RSA_alone  ~ date_category, data = data)
+
+tab <- tabyl(data, together_usable_b,date_category, show_na = FALSE)
+chisq.test(tab)
+
+tab <- tabyl(data, bgm_t_b_par,date_category, show_na = FALSE)
+chisq.test(tab)
+
+BarChart(x = together_usable_b, by = date_category, data = data, horiz = T, stack100 = T)
+BarChart(x = alone_usable_b, by = date_category, data = data, horiz = T, stack100 = T)
+
+BarChart(x = restype, by = together_usable_b, data = data, horiz = T, stack100 = T)
+BarChart(x = restype, by = alone_usable_b, data = data, horiz = T, stack100 = T)
+
+table(data$bgm_qus_face_1_28)
+
+
+tab <- tabyl(data, together_usable_b,bgm_qus_face_1_28, show_na = F)
+chisq.test(tab)
+
+BarChart(x = together_usable_b, by = bgm_qus_face_1_28, data = data, horiz = F, stack100 = F)
+BarChart(x = alone_usable_b, by = bgm_qus_face_1_28, data = data, horiz = T, stack100 = T)
+
+table(data$bgm_qus_bfeed_1_28)
+
+BarChart(x = together_usable_b, by = bgm_qus_bfeed_1_28, data = data, horiz = T, stack100 = T)
+BarChart(x = alone_usable_b, by = bgm_qus_bfeed_1_28, data = data, horiz = T, stack100 = T)
+
+
+table(data$bgm_qus_rocking_1_28)
+
+BarChart(x = together_usable_b, by = bgm_qus_rocking_1_28, data = data, horiz = T, stack100 = T)
+BarChart(x = alone_usable_b, by = bgm_qus_rocking_1_28, data = data, horiz = T, stack100 = T)
+
+table(data$bgm_qus_stroking_1_28)
+
+BarChart(x = together_usable_b, by = bgm_qus_stroking_1_28, data = data, horiz = T, stack100 = T)
+BarChart(x = alone_usable_b, by = bgm_qus_stroking_1_28, data = data, horiz = T, stack100 = T)
+
+table(data$bgm_qus_talking_1_28)
+
+BarChart(x = together_usable_b, by = bgm_qus_talking_1_28, data = data, horiz = T, stack100 = T)
+BarChart(x = alone_usable_b, by = bgm_qus_talking_1_28, data = data, horiz = T, stack100 = T)
+
+
+
+```
+
+
+# Associations with baby variables RSA
+```{r}
+
+# Child gender
+lessR::tt_brief(RSA_tog  ~ child_gender_final, data = data)
+lessR::tt_brief(RSA_alone  ~ child_gender_final, data = data)
+
+# BIRTH --> NOTHING
+table(data$underweight_birth)
+lessR::tt_brief(RSA_tog  ~ underweight_birth, data = data)
+lessR::tt_brief(RSA_alone  ~ underweight_birth, data = data)
+
+table(data$weight_category_birth)
+lessR::tt_brief(RSA_tog  ~ weight_category_birth, data = data)
+lessR::tt_brief(RSA_alone  ~ weight_category_birth, data = data)
+
+table(data$wasting_birth)
+lessR::tt_brief(RSA_tog  ~ wasting_birth, data = data)
+lessR::tt_brief(RSA_alone  ~ wasting_birth, data = data)
+
+table(data$stunting_birth)
+lessR::tt_brief(RSA_tog  ~ stunting_birth, data = data)
+lessR::tt_brief(RSA_alone  ~ stunting_birth, data = data)
+
+table(data$less_than_full_term)
+lessR::tt_brief(RSA_tog  ~ less_than_full_term, data = data)
+lessR::tt_brief(RSA_alone  ~ less_than_full_term, data = data)
+
+# 28 DAYS --> NOTHING
+table(data$underweight_28)
+lessR::tt_brief(RSA_tog  ~ underweight_28, data = data)
+lessR::tt_brief(RSA_alone  ~ underweight_28, data = data)
+
+table(data$wasting_28)
+lessR::tt_brief(RSA_tog  ~ wasting_28, data = data)
+lessR::tt_brief(RSA_alone  ~ wasting_28, data = data)
+
+table(data$stunting_28)
+lessR::tt_brief(RSA_tog  ~ stunting_28, data = data)
+#lessR::tt_brief(RSA_alone  ~ stunting_28, data = data)
+
+table(data$less_than_full_term)
+lessR::tt_brief(RSA_tog  ~ less_than_full_term, data = data)
+lessR::tt_brief(RSA_alone  ~ less_than_full_term, data = data)
+
+lessR::tt_brief(RSA_tog  ~ restype, data = data)
+lessR::tt_brief(RSA_alone  ~ restype, data = data)
+
+####### ZSCORES
+data %>%  correlation(p_adjust = "none", select = c("RSA_alone", "RSA_tog"), select2 = c( "child_age_final", "child_ga_final","wflz_28"  , "wfaz_28" ,"lfaz_28"   , "hcaz_28"   ,    "wflz_birth", "wfaz_birth" ,           "lfaz_birth" ,"hcaz_birth", "average_birth_muac" ,"average_baby_muac.y"), method = "pearson")
+
+data %>%  filter(bgc_avg > 3) %>% correlation(p_adjust = "none", select = c("RSA_alone", "RSA_tog"), select2 = c( "child_age_final","child_ga_final","wflz_28"  , "wfaz_28" ,"lfaz_28"   ,        "hcaz_28"   ,    "wflz_birth", "wfaz_birth" ,           "lfaz_birth" ,"hcaz_birth", "average_birth_muac" ,"average_baby_muac.y"), method = "pearson")
+
+data %>% filter(bgc_avg <4)  %>% correlation(p_adjust = "none", select = c("RSA_alone", "RSA_tog"), select2 = c( "child_age_final","child_ga_final","wflz_28"  , "wfaz_28" ,"lfaz_28"   ,        "hcaz_28"   ,    "wflz_birth", "wfaz_birth" ,           "lfaz_birth" ,"hcaz_birth", "average_birth_muac" ,"average_baby_muac.y"), method = "pearson")
+
+######
+
+s <- lm(RSA_alone ~ bgc_avg*wflz_birth + wflz_28 + child_ga_final + primiparous + child_age_final, data = data)
+summary(s)
+library(interactions)
+
+probe_interaction(model = s, pred = wflz_birth, modx = bgc_avg, interval = T, jnplot = T)
+
+t <- lm(RSA_alone ~ bgc_avg*average_birth_muac + average_baby_muac.y + child_ga_final + child_age_final+ primiparous, data = data)
+summary(t)
+interact_plot(t, pred = average_birth_muac, modx = bgc_avg, interval = T, jnplot = T)
+sim_slopes(t, pred = average_birth_muac, modx = bgc_avg, interval = T, jnplot = T)
+
+data_w <- data %>% filter(wflz_birth > -4 & wflz_birth < 3)
+data_long <- data_w %>%
+  pivot_longer(
+    cols = c(average_birth_muac, wflz_birth),
+    names_to = "Anthropometrics",
+    values_to = "Anthropometric_value"
+  )
+
+# Add the Arousal State
+data_long <- data_long %>%
+  mutate(ArousalState = case_when(
+    bgc_avg < 4 ~ "Low arousal state",
+    bgc_avg >= 4 ~ "High arousal state"
+  )) %>%
+  filter(!is.na(ArousalState))
+# Plot with reshaped data
+library(ggplot2)
+
+# Updated plot with non-bold labels and custom theme
+ggplot(data_long, aes(x = Anthropometric_value, y = RSA_alone, color = ArousalState)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", size = 0.8, color = "black", alpha = 0.1) +
+  facet_grid(ArousalState ~ Anthropometrics, scales = "free_x", 
+             labeller = labeller(Anthropometrics = c(average_birth_muac = "MUAC at birth (cms)", 
+                                                     wflz_birth = "Weight-for-length at birth"))) +
+  theme_modern() + 
+  theme(
+    panel.spacing = unit(1.2, "lines"),  # Adds spacing between high and low arousal panels
+    strip.text = element_text(size = 14, face = "plain"),  # Keeps panel labels non-bold
+    axis.text = element_text(size = 12),
+    legend.position = "none",  # Removes the legend
+    axis.title = element_text(size = 15, face = "bold")  # Keeps axis titles non-bold
+  ) +
+  scale_color_manual(values = poster) +
+  scale_y_continuous(breaks = seq(1, 6, 0.5), expand = expansion(mult = 0.05)) +  # More detailed RSA scale
+ scale_x_continuous(breaks = scales::pretty_breaks(n = 5)) +  # Adjust anthropometric scale
+  labs(
+    x = "Anthropometrics",
+    y = "Infant solo RSA",
+    title = "Infant RSA & Anthropometrics by Arousal State"
+  )
+
+ggsave("AnthroResults.png", width = 6, height = 5, unit = "in", dpi = 300, bg = 'white')
+#ggsave("pwixsx_leg.png", width = 10, height = 6, unit = "in", dpi = 300, bg = 'white')
+
+
+```
+
+# Descriptives
+```{r}
+
+#desc <- data %>% select(wflz_birth) %>% describe_distribution()
+desc <- data %>% select(child_ga_final) %>% describe_distribution()
+desc
+desc <- data %>% select(RSA_alone, RSA_tog) %>% describe_distribution()
+desc
+desc <- data %>% select(BMI) %>% describe_distribution()
+desc
+
+desc <- data %>% select(average_birth_length, average_birth_muac, average_birth_weight,
+                        average_baby_length.y, average_baby_weight.y, average_baby_muac.y) %>% describe_distribution()
+desc
+data %>% select(RSA_alone, RSA_tog) %>% describe_distribution()
+
+# Load necessary library
+library(dplyr)
+
+# Calculate median for continuous variables and percentage for gender variable
+summary_stats <- data %>%
+  summarise(
+    median_q102b_guess_age = median(q102b_guess_age, na.rm = TRUE),
+    median_child_age_final = median(child_age_final, na.rm = TRUE),
+    male_count = sum(child_gender_final == 1, na.rm = TRUE),
+    female_count = sum(child_gender_final == 2, na.rm = TRUE),
+    male_percentage = (male_count / n()) * 100,
+    female_percentage = (female_count / n()) * 100
+  )
+
+# Display the results
+summary_stats
+
+data %>% count(child_gender_final)
+data %>% count(restype)
+
+
+```
+
+
